@@ -13,6 +13,7 @@
 (define-constant ERR-INVALID-GOAL (err u109))
 (define-constant ERR-CAMPAIGN-CANCELLED (err u110))
 (define-constant ERR-CAMPAIGN-EXTENDED-TOO-MUCH (err u111))
+(define-constant ERR-MINIMUM-CONTRIBUTION-NOT-MET (err u112))
 
 ;; Events with Enhanced Information
 (define-event campaign-created 
@@ -46,6 +47,7 @@
   uint 
   {
     goal: uint,
+    min-contribution: uint,
     end-block: uint,
     total-raised: uint,
     is-active: bool,
@@ -82,12 +84,14 @@
 (define-public (create-campaign 
   (goal uint) 
   (duration uint)
-  (max-extension-blocks uint))
+  (max-extension-blocks uint)
+  (min-contribution uint))
   (let 
     (
       (campaign-id (var-get next-campaign-id))
       (campaign-details {
         goal: goal,
+        min-contribution: min-contribution,
         end-block: (+ block-height duration),
         total-raised: u0,
         is-active: true,
@@ -96,6 +100,7 @@
     )
     (asserts! (> goal u0) ERR-INVALID-GOAL)
     (asserts! (> duration u0) ERR-INVALID-DURATION)
+    (asserts! (> min-contribution u0) ERR-INSUFFICIENT-CONTRIBUTION)
     
     (map-set campaigns campaign-id campaign-details)
     (map-set campaign-admins {campaign-id: campaign-id, admin: tx-sender} true)
@@ -117,6 +122,7 @@
     (asserts! (campaign.is-active) ERR-CAMPAIGN-CANCELLED)
     (asserts! (<= block-height (campaign.end-block)) ERR-FUNDRAISING-ENDED)
     (asserts! (> amount u0) ERR-INSUFFICIENT-CONTRIBUTION)
+    (asserts! (>= amount campaign.min-contribution) ERR-MINIMUM-CONTRIBUTION-NOT-MET)
     
     (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
     

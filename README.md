@@ -9,8 +9,18 @@ This project introduces a cutting-edge, secure, and flexible decentralized fundr
 ### 1. Advanced Fundraising Mechanisms
 - **Dynamic Goal Setting**: Flexible fundraising targets
 - **Configurable Campaign Duration**: Precise time-based controls
+- **Minimum Contribution Enforcement**: 
+  - Set custom minimum contribution thresholds
+  - Prevent low-value or spam contributions
+  - Enhance campaign participation quality
 - **Tiered Contribution Support**: Customizable contribution levels
 - **Real-time Progress Tracking**: Transparent campaign metrics
+
+#### Minimum Contribution: Advanced Controls
+- Per-campaign minimum contribution settings
+- Automatic low-value contribution rejection
+- Configurable threshold management
+- Campaign-specific participation rules
 
 ### 2. Robust Security Architecture
 - **Role-Based Access Control (RBAC)**
@@ -96,13 +106,44 @@ clarinet test
 ### Creating a Campaign
 ```clarity
 (define-public (create-campaign 
-  (goal uint) 
-  (duration uint)
-  (min-contribution uint)
+  (goal uint)               ; Total fundraising goal
+  (duration uint)           ; Campaign duration in blocks
+  (max-extension-blocks uint) ; Max allowed campaign extension
+  (min-contribution uint)   ; Minimum contribution amount
 )
-  ;; Campaign creation logic
+  ;; Campaign creation logic with validation
+  (asserts! (> goal u0) ERR-INVALID-GOAL)
+  (asserts! (> duration u0) ERR-INVALID-DURATION)
+  (asserts! (> min-contribution u0) ERR-INSUFFICIENT-CONTRIBUTION)
+  
+  ;; Minimum Contribution Validation
+  ;; Ensures that the specified minimum contribution meets campaign requirements
+  ;; Prevents setting unreasonable or zero minimum contribution thresholds
 )
 ```
+
+#### Minimum Contribution Configuration
+- **Threshold Control**: Set precise minimum contribution amounts
+- **Validation Checks**: 
+  - Ensures minimum contribution is greater than zero
+  - Prevents setting invalid or zero thresholds
+  - Provides granular control over contribution parameters
+
+### Contribution Requirements
+- **Minimum Contribution Feature**
+  - Each campaign can set a custom minimum contribution threshold
+  - Prevents small, potentially spam-like contributions
+  - Ensures campaign quality and serious participant engagement
+  - Configurable minimum contribution amount per campaign
+  - Automatically rejects contributions below the set threshold
+  - Protects campaign integrity and filters out low-value contributions
+
+#### Benefits of Minimum Contribution
+- Reduces administrative overhead
+- Filters out non-serious or speculative contributions
+- Helps maintain campaign credibility
+- Encourages more meaningful participant involvement
+- Provides campaign creators fine-grained control over contribution dynamics
 
 ### Contributing to a Campaign
 ```clarity

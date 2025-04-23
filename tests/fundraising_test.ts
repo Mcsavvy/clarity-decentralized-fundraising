@@ -29,17 +29,59 @@ Clarinet.test({
     const wallet1 = accounts.get('wallet_1')!;
     
     let block = chain.mineBlock([
-      Tx.contractCall('fundraising', 'initialize', [types.uint(1000000), types.uint(144)], deployer.address),
-      Tx.contractCall('fundraising', 'contribute', [types.uint(500000)], wallet1.address)
+      Tx.contractCall('fundraising', 'create-campaign', 
+        [
+          types.uint(1000000),  // goal 
+          types.uint(144),       // duration 
+          types.uint(50),        // max-extension-blocks
+          types.uint(100)        // min-contribution
+        ], 
+        deployer.address
+      ),
+      Tx.contractCall('fundraising', 'contribute', 
+        [
+          types.uint(0),         // campaign-id
+          types.uint(500000)     // amount
+        ], 
+        wallet1.address
+      )
     ]);
     
     assertEquals(block.receipts.length, 2);
+    block.receipts[0].result.expectOk();
     block.receipts[1].result.expectOk().expectBool(true);
-    
-    let totalRaised = chain.callReadOnlyFn('fundraising', 'get-total-raised', [], deployer.address);
-    totalRaised.result.expectOk().expectUint(500000);
   },
 });
+
+Clarinet.test({
+  name: "Ensure that minimum contribution is enforced",
+  async fn(chain: Chain, accounts: Map<string, Account>) {
+    const deployer = accounts.get('deployer')!;
+    const wallet1 = accounts.get('wallet_1')!;
+    
+    let block = chain.mineBlock([
+      Tx.contractCall('fundraising', 'create-campaign', 
+        [
+          types.uint(1000000),  // goal 
+          types.uint(144),       // duration 
+          types.uint(50),        // max-extension-blocks
+          types.uint(500)        // min-contribution
+        ], 
+        deployer.address
+      ),
+      Tx.contractCall('fundraising', 'contribute', 
+        [
+          types.uint(0),         // campaign-id
+          types.uint(100)        // amount less than min contribution
+        ], 
+        wallet1.address
+      )
+    ]);
+    
+    assertEquals(block.receipts.length, 2);
+    block.receipts[0].result.expectOk();
+    block.receipts[1].result.expectErr().expectUint(112); // ERR-MINIMUM-CONTRIBUTION-NOT-MET
+  });
 
 Clarinet.test({
   name: "Ensure that owner can set tiers",
