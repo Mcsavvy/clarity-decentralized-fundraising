@@ -1,13 +1,9 @@
-;; Decentralized Fundraising Contract with Enhanced Security and Logging
+;; Multi-Campaign Decentralized Fundraising Contract with Advanced Features
 
-;; Constants
-(define-constant contract-owner tx-sender)
-(define-constant deployer-principal contract-caller)
-
-;; Error Codes
+;; Error Constants (Extended Error Handling)
 (define-constant ERR-OWNER-ONLY (err u100))
-(define-constant ERR-ALREADY-INITIALIZED (err u101))
-(define-constant ERR-NOT-INITIALIZED (err u102))
+(define-constant ERR-CAMPAIGN-NOT-FOUND (err u101))
+(define-constant ERR-CAMPAIGN-ALREADY-EXISTS (err u102))
 (define-constant ERR-GOAL-NOT-REACHED (err u103))
 (define-constant ERR-FUNDRAISING-ENDED (err u104))
 (define-constant ERR-INVALID-TIER (err u105))
@@ -15,131 +11,271 @@
 (define-constant ERR-UNAUTHORIZED (err u107))
 (define-constant ERR-INVALID-DURATION (err u108))
 (define-constant ERR-INVALID-GOAL (err u109))
+(define-constant ERR-CAMPAIGN-CANCELLED (err u110))
+(define-constant ERR-CAMPAIGN-EXTENDED-TOO-MUCH (err u111))
 
-;; Events
-(define-event fundraising-initialized 
+;; Events with Enhanced Information
+(define-event campaign-created 
+  (campaign-id uint)
   (goal uint)
   (duration uint)
-  (initialized-by principal))
+  (creator principal))
 
 (define-event contribution-made 
+  (campaign-id uint)
   (contributor principal)
   (amount uint)
   (total-raised uint))
 
-(define-event tier-set 
-  (tier-id uint)
-  (amount uint))
-
 (define-event funds-claimed 
+  (campaign-id uint)
   (amount uint)
   (claimer principal))
 
-(define-event refund-processed 
-  (contributor principal)
-  (amount uint))
+(define-event campaign-cancelled
+  (campaign-id uint)
+  (reason (string-ascii 100)))
 
-;; Data Variables
-(define-data-var fundraising-goal uint u0)
-(define-data-var fundraising-end-block uint u0)
-(define-data-var total-raised uint u0)
-(define-data-var is-initialized bool false)
-(define-data-var admin principal tx-sender)
+(define-event campaign-duration-extended
+  (campaign-id uint)
+  (original-end-block uint)
+  (new-end-block uint))
 
-;; Maps
-(define-map contributors principal uint)
-(define-map tiers uint uint)
-(define-map admin-list principal bool)
+;; Data Maps and Variables
+(define-map campaigns 
+  uint 
+  {
+    goal: uint,
+    end-block: uint,
+    total-raised: uint,
+    is-active: bool,
+    creator: principal
+  }
+)
+
+(define-map campaign-contributors 
+  {campaign-id: uint, contributor: principal} 
+  uint
+)
+
+(define-map campaign-tiers 
+  {campaign-id: uint, tier-id: uint} 
+  uint
+)
+
+(define-map campaign-admins 
+  {campaign-id: uint, admin: principal} 
+  bool
+)
+
+(define-data-var next-campaign-id uint u0)
 
 ;; Private Functions
-(define-private (is-admin (sender principal))
-  (default-to false (map-get? admin-list sender)))
+(define-private (is-campaign-admin (campaign-id uint) (sender principal))
+  (default-to false (map-get? campaign-admins {campaign-id: campaign-id, admin: sender})))
+
+;; #[allow(unchecked_params)]
+(define-private (get-campaign (campaign-id uint))
+  (unwrap! (map-get? campaigns campaign-id) (err ERR-CAMPAIGN-NOT-FOUND)))
 
 ;; Public Functions
-(define-public (initialize (goal uint) (duration uint))
-  (begin
-    (asserts! (not (var-get is-initialized)) ERR-ALREADY-INITIALIZED)
+(define-public (create-campaign 
+  (goal uint) 
+  (duration uint)
+  (max-extension-blocks uint))
+  (let 
+    (
+      (campaign-id (var-get next-campaign-id))
+      (campaign-details {
+        goal: goal,
+        end-block: (+ block-height duration),
+        total-raised: u0,
+        is-active: true,
+        creator: tx-sender
+      })
+    )
     (asserts! (> goal u0) ERR-INVALID-GOAL)
     (asserts! (> duration u0) ERR-INVALID-DURATION)
-    (var-set fundraising-goal goal)
-    (var-set fundraising-end-block (+ block-height duration))
-    (var-set is-initialized true)
-    (print (fundraising-initialized goal duration tx-sender))
-    (ok true)))
+    
+    (map-set campaigns campaign-id campaign-details)
+    (map-set campaign-admins {campaign-id: campaign-id, admin: tx-sender} true)
+    
+    (var-set next-campaign-id (+ campaign-id u1))
+    
+    (print (campaign-created campaign-id goal duration tx-sender))
+    (ok campaign-id)))
 
-(define-public (contribute (amount uint))
-  (let ((current-contribution (default-to u0 (map-get? contributors tx-sender))))
-    (asserts! (var-get is-initialized) ERR-NOT-INITIALIZED)
-    (asserts! (<= block-height (var-get fundraising-end-block)) ERR-FUNDRAISING-ENDED)
+(define-public (contribute (campaign-id uint) (amount uint))
+  (let 
+    (
+      (campaign (try! (get-campaign campaign-id)))
+      (current-contribution 
+        (default-to u0 
+          (map-get? campaign-contributors {campaign-id: campaign-id, contributor: tx-sender}))
+      )
+    )
+    (asserts! (campaign.is-active) ERR-CAMPAIGN-CANCELLED)
+    (asserts! (<= block-height (campaign.end-block)) ERR-FUNDRAISING-ENDED)
     (asserts! (> amount u0) ERR-INSUFFICIENT-CONTRIBUTION)
     
     (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
-    (map-set contributors tx-sender (+ current-contribution amount))
-    (var-set total-raised (+ (var-get total-raised) amount))
     
-    (print (contribution-made tx-sender amount (var-get total-raised)))
+    (map-set campaign-contributors 
+      {campaign-id: campaign-id, contributor: tx-sender} 
+      (+ current-contribution amount)
+    )
+    
+    (map-set campaigns campaign-id 
+      (merge campaign {total-raised: (+ (campaign.total-raised) amount)})
+    )
+    
+    (print (contribution-made 
+      campaign-id 
+      tx-sender 
+      amount 
+      (+ (campaign.total-raised) amount)
+    ))
+    
     (ok true)))
 
-(define-public (claim-funds)
-  (begin
-    (asserts! (or (is-eq tx-sender (var-get admin)) (is-admin tx-sender)) ERR-UNAUTHORIZED)
-    (asserts! (>= (var-get total-raised) (var-get fundraising-goal)) ERR-GOAL-NOT-REACHED)
+(define-public (claim-funds (campaign-id uint))
+  (let 
+    (
+      (campaign (try! (get-campaign campaign-id)))
+    )
+    (asserts! 
+      (or 
+        (is-eq tx-sender campaign.creator) 
+        (is-campaign-admin campaign-id tx-sender)
+      ) 
+      ERR-UNAUTHORIZED
+    )
+    (asserts! (>= campaign.total-raised campaign.goal) ERR-GOAL-NOT-REACHED)
     
-    (let ((total-amount (var-get total-raised)))
-      (try! (as-contract (stx-transfer? total-amount tx-sender contract-owner)))
-      (print (funds-claimed total-amount tx-sender))
-      (ok true))))
-
-(define-public (refund)
-  (let ((contribution (default-to u0 (map-get? contributors tx-sender))))
-    (asserts! (< (var-get total-raised) (var-get fundraising-goal)) ERR-GOAL-NOT-REACHED)
-    (asserts! (> block-height (var-get fundraising-end-block)) ERR-FUNDRAISING-ENDED)
+    (try! 
+      (as-contract 
+        (stx-transfer? campaign.total-raised tx-sender campaign.creator)
+      )
+    )
     
-    (try! (as-contract (stx-transfer? contribution tx-sender tx-sender)))
-    (map-delete contributors tx-sender)
-    (var-set total-raised (- (var-get total-raised) contribution))
-    
-    (print (refund-processed tx-sender contribution))
+    (print (funds-claimed campaign-id campaign.total-raised tx-sender))
     (ok true)))
 
-(define-public (set-tier (tier-id uint) (amount uint))
-  (begin
-    (asserts! (or (is-eq tx-sender (var-get admin)) (is-admin tx-sender)) ERR-UNAUTHORIZED)
-    (map-set tiers tier-id amount)
-    (print (tier-set tier-id amount))
+(define-public (refund (campaign-id uint))
+  (let 
+    (
+      (campaign (try! (get-campaign campaign-id)))
+      (contribution 
+        (default-to u0 
+          (map-get? campaign-contributors 
+            {campaign-id: campaign-id, contributor: tx-sender}
+          )
+        )
+      )
+    )
+    (asserts! (< campaign.total-raised campaign.goal) ERR-GOAL-NOT-REACHED)
+    (asserts! (> block-height campaign.end-block) ERR-FUNDRAISING-ENDED)
+    
+    (try! 
+      (as-contract 
+        (stx-transfer? contribution tx-sender tx-sender)
+      )
+    )
+    
+    (map-delete campaign-contributors 
+      {campaign-id: campaign-id, contributor: tx-sender}
+    )
+    
+    (map-set campaigns campaign-id 
+      (merge campaign {total-raised: (- campaign.total-raised contribution)})
+    )
+    
     (ok true)))
 
-(define-public (add-admin (new-admin principal))
-  (begin
-    (asserts! (is-eq tx-sender (var-get admin)) ERR-OWNER-ONLY)
-    (map-set admin-list new-admin true)
+(define-public (extend-campaign-duration 
+  (campaign-id uint) 
+  (additional-blocks uint)
+  (max-extension-blocks uint))
+  (let 
+    (
+      (campaign (try! (get-campaign campaign-id)))
+    )
+    (asserts! 
+      (or 
+        (is-eq tx-sender campaign.creator) 
+        (is-campaign-admin campaign-id tx-sender)
+      ) 
+      ERR-UNAUTHORIZED
+    )
+    (asserts! (<= additional-blocks max-extension-blocks) ERR-CAMPAIGN-EXTENDED-TOO-MUCH)
+    
+    (map-set campaigns campaign-id 
+      (merge campaign {end-block: (+ campaign.end-block additional-blocks)})
+    )
+    
+    (print (campaign-duration-extended 
+      campaign-id 
+      campaign.end-block 
+      (+ campaign.end-block additional-blocks)
+    ))
+    
     (ok true)))
 
-(define-public (remove-admin (admin-to-remove principal))
-  (begin
-    (asserts! (is-eq tx-sender (var-get admin)) ERR-OWNER-ONLY)
-    (map-delete admin-list admin-to-remove)
+(define-public (cancel-campaign 
+  (campaign-id uint) 
+  (reason (string-ascii 100)))
+  (let 
+    (
+      (campaign (try! (get-campaign campaign-id)))
+    )
+    (asserts! 
+      (or 
+        (is-eq tx-sender campaign.creator) 
+        (is-campaign-admin campaign-id tx-sender)
+      ) 
+      ERR-UNAUTHORIZED
+    )
+    
+    (map-set campaigns campaign-id 
+      (merge campaign {is-active: false})
+    )
+    
+    (print (campaign-cancelled campaign-id reason))
+    (ok true)))
+
+(define-public (add-campaign-admin 
+  (campaign-id uint) 
+  (new-admin principal))
+  (let 
+    (
+      (campaign (try! (get-campaign campaign-id)))
+    )
+    (asserts! (is-eq tx-sender campaign.creator) ERR-UNAUTHORIZED)
+    (map-set campaign-admins 
+      {campaign-id: campaign-id, admin: new-admin} 
+      true
+    )
     (ok true)))
 
 ;; Read-only Functions
-(define-read-only (get-goal)
-  (ok (var-get fundraising-goal)))
+(define-read-only (get-campaign-details (campaign-id uint))
+  (ok (try! (get-campaign campaign-id))))
 
-(define-read-only (get-end-block)
-  (ok (var-get fundraising-end-block)))
+(define-read-only (get-campaign-contribution 
+  (campaign-id uint) 
+  (contributor principal))
+  (ok 
+    (default-to u0 
+      (map-get? campaign-contributors 
+        {campaign-id: campaign-id, contributor: contributor}
+      )
+    )
+  ))
 
-(define-read-only (get-total-raised)
-  (ok (var-get total-raised)))
-
-(define-read-only (get-contribution (contributor principal))
-  (ok (default-to u0 (map-get? contributors contributor))))
-
-(define-read-only (get-tier-amount (tier-id uint))
-  (ok (default-to u0 (map-get? tiers tier-id))))
-
-(define-read-only (is-goal-reached)
-  (ok (>= (var-get total-raised) (var-get fundraising-goal))))
-
-(define-read-only (get-admin)
-  (ok (var-get admin)))
+(define-read-only (is-campaign-goal-reached (campaign-id uint))
+  (let 
+    (
+      (campaign (try! (get-campaign campaign-id)))
+    )
+    (ok (>= campaign.total-raised campaign.goal))))
 
