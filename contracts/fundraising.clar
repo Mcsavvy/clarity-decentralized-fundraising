@@ -1,19 +1,29 @@
-;; Multi-Campaign Decentralized Fundraising Contract with Advanced Features
+;; Decentralized Fundraising Contract with Enhanced Security and Governance
 
-;; Error Constants (Extended Error Handling)
-(define-constant ERR-OWNER-ONLY (err u100))
-(define-constant ERR-CAMPAIGN-NOT-FOUND (err u101))
-(define-constant ERR-CAMPAIGN-ALREADY-EXISTS (err u102))
-(define-constant ERR-GOAL-NOT-REACHED (err u103))
-(define-constant ERR-FUNDRAISING-ENDED (err u104))
-(define-constant ERR-INVALID-TIER (err u105))
-(define-constant ERR-INSUFFICIENT-CONTRIBUTION (err u106))
-(define-constant ERR-UNAUTHORIZED (err u107))
-(define-constant ERR-INVALID-DURATION (err u108))
-(define-constant ERR-INVALID-GOAL (err u109))
-(define-constant ERR-CAMPAIGN-CANCELLED (err u110))
-(define-constant ERR-CAMPAIGN-EXTENDED-TOO-MUCH (err u111))
-(define-constant ERR-MINIMUM-CONTRIBUTION-NOT-MET (err u112))
+;; Contract Overview:
+;; - Supports multiple fundraising campaigns
+;; - Implements robust security measures
+;; - Provides fine-grained access control
+;; - Includes emergency pause functionality
+;; - Prevents economic attacks and unauthorized modifications
+
+;; Error Constants (Enhanced Error Handling)
+(define-constant ERR_UNAUTHORIZED u1000)
+(define-constant ERR_INVALID_CAMPAIGN u1001)
+(define-constant ERR_CAMPAIGN_NOT_FOUND u1002)
+(define-constant ERR_GOAL_NOT_REACHED u1003)
+(define-constant ERR_FUNDRAISING_ENDED u1004)
+(define-constant ERR_INVALID_CONTRIBUTION u1005)
+(define-constant ERR_CAMPAIGN_PAUSED u1006)
+(define-constant ERR_MAX_CONTRIBUTION_EXCEEDED u1007)
+(define-constant ERR_MINIMUM_CONTRIBUTION_NOT_MET u1008)
+(define-constant ERR_CAMPAIGN_CANCELLED u1009)
+(define-constant ERR_INVALID_DURATION u1010)
+(define-constant ERR_CAMPAIGN_EXTENDED_TOO_MUCH u1011)
+(define-constant ERR_WITHDRAWAL_NOT_ALLOWED u1012)
+(define-constant ERR_CONTRACT_PAUSED u1013)
+(define-constant ERR_INVALID_GOAL u1014)
+(define-constant ERR_INSUFFICIENT_FUNDS u1015)
 
 ;; Events with Enhanced Information
 (define-event campaign-created 
@@ -70,11 +80,38 @@
   bool
 )
 
+;; Emergency Pause Control
+(define-data-var contract-paused bool false)
 (define-data-var next-campaign-id uint u0)
+(define-data-var max-contribution-per-campaign uint u10000000) ;; 10 STX default max
+
+;; Admin Control
+(define-map contract-admins principal bool)
 
 ;; Private Functions
+(define-private (is-contract-admin (sender principal))
+  (default-to false (map-get? contract-admins sender)))
+
 (define-private (is-campaign-admin (campaign-id uint) (sender principal))
   (default-to false (map-get? campaign-admins {campaign-id: campaign-id, admin: sender})))
+
+;; Emergency Pause Functions
+(define-public (pause-contract)
+  (begin
+    (asserts! (is-contract-admin tx-sender) (err ERR_UNAUTHORIZED))
+    (var-set contract-paused true)
+    (ok true)))
+
+(define-public (unpause-contract)
+  (begin
+    (asserts! (is-contract-admin tx-sender) (err ERR_UNAUTHORIZED))
+    (var-set contract-paused false)
+    (ok true)))
+
+(define-private (check-contract-active)
+  (begin
+    (asserts! (not (var-get contract-paused)) (err ERR_CONTRACT_PAUSED))
+    true))
 
 ;; #[allow(unchecked_params)]
 (define-private (get-campaign (campaign-id uint))
@@ -86,29 +123,37 @@
   (duration uint)
   (max-extension-blocks uint)
   (min-contribution uint))
-  (let 
-    (
-      (campaign-id (var-get next-campaign-id))
-      (campaign-details {
-        goal: goal,
-        min-contribution: min-contribution,
-        end-block: (+ block-height duration),
-        total-raised: u0,
-        is-active: true,
-        creator: tx-sender
-      })
-    )
-    (asserts! (> goal u0) ERR-INVALID-GOAL)
-    (asserts! (> duration u0) ERR-INVALID-DURATION)
-    (asserts! (> min-contribution u0) ERR-INSUFFICIENT-CONTRIBUTION)
+  (begin
+    ;; Contract active check
+    (try! (check-contract-active))
     
-    (map-set campaigns campaign-id campaign-details)
-    (map-set campaign-admins {campaign-id: campaign-id, admin: tx-sender} true)
-    
-    (var-set next-campaign-id (+ campaign-id u1))
-    
-    (print (campaign-created campaign-id goal duration tx-sender))
-    (ok campaign-id)))
+    (let 
+      (
+        (campaign-id (var-get next-campaign-id))
+        (campaign-details {
+          goal: goal,
+          min-contribution: min-contribution,
+          max-contribution: (var-get max-contribution-per-campaign),
+          end-block: (+ block-height duration),
+          total-raised: u0,
+          is-active: true,
+          creator: tx-sender,
+          cancelled: false
+        })
+      )
+      ;; Input validations with enhanced error handling
+      (asserts! (> goal u0) (err ERR_INVALID_GOAL))
+      (asserts! (> duration u0) (err ERR_INVALID_DURATION))
+      (asserts! (> min-contribution u0) (err ERR_INVALID_CONTRIBUTION))
+      (asserts! (< min-contribution (var-get max-contribution-per-campaign)) (err ERR_MAX_CONTRIBUTION_EXCEEDED))
+      
+      (map-set campaigns campaign-id campaign-details)
+      (map-set campaign-admins {campaign-id: campaign-id, admin: tx-sender} true)
+      
+      (var-set next-campaign-id (+ campaign-id u1))
+      
+      (print (campaign-created campaign-id goal duration tx-sender))
+      (ok campaign-id)))
 
 (define-public (contribute (campaign-id uint) (amount uint))
   (let 
