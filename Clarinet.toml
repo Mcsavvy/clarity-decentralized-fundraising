@@ -8,6 +8,10 @@ requirements = []
 path = "contracts/fundraising.clar"
 depends_on = []
 
+[contracts.token-rewards]
+path = "contracts/token-rewards.clar"
+depends_on = []
+
 [repl]
 costs_version = 2
 parser_version = 2
